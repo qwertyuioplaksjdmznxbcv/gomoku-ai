@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8" />
+<title>19x19 五子棋 - AI</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #f0f0f0;
+    text-align: center;
+  }
+  canvas {
+    background: #deb887;
+    border: 2px solid #333;
+    margin-top: 10px;
+    cursor: pointer;
+  }
+  button {
+    margin: 5px;
+    padding: 8px 16px;
+    font-size: 16px;
+  }
+  #status {
+    margin-top: 10px;
+    font-size: 20px;
+    min-height: 28px;
+  }
+</style>
+</head>
+<body>
+
+<h1>五子棋 AI</h1>
+<div>
+  <button id="modeBtn">切換到雙人模式</button>
+  <button onclick="undo()">悔棋</button>
+  <button onclick="restart()">重來</button>
+</div>
+<canvas id="board" width="570" height="570"></canvas>
+<div id="status">輪到：黑子（玩家）</div>
+
+<script>
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+const size = 19;
+const cellSize = canvas.width / size;
+const board = Array.from({ length: size }, () => Array(size).fill(0));
+const moveStack = [];
+let currentPlayer = 1; // 1=黑,2=白
+let gameOver = false;
+let mode = "ai"; // "ai" 或 "pvp"
+let aiThinking = false;
+
+const directions = [
+  [1,0], [0,1], [1,1], [1,-1]
+];
+
+// 畫棋盤線
+function drawBoard(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.strokeStyle="#333";
+  for(let i=0;i<size;i++){
+    ctx.beginPath();
+    ctx.moveTo(cellSize/2, cellSize/2 + i*cellSize);
+    ctx.lineTo(canvas.width - cellSize/2, cellSize/2 + i*cellSize);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cellSize/2 + i*cellSize, cellSize/2);
+    ctx.lineTo(cellSize/2 + i*cellSize, canvas.height - cellSize/2);
+    ctx.stroke();
+  }
+}
+// 畫棋子
+function drawPiece(x,y,player){
+  const cx = x*cellSize + cellSize/2;
+  const cy = y*cellSize + cellSize/2;
+  const r = cellSize/2.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI*2);
+  ctx.fillStyle = player===1 ? "black" : "white";
+  ctx.fill();
+  ctx.stroke();
+}
+// 檢查五連勝利
+function checkWin(x,y,player){
+  for(let [dx,dy] of directions){
+    let count = 1;
+    for(let dir of [-1,1]){
+      let nx = x+dx*dir;
+      let ny = y+dy*dir;
+      while(nx>=0&&ny>=0&&nx<size&&ny<size&&board[ny][nx]===player){
+        count++;
+        nx+=dx*dir;
+        ny+=dy*dir;
+      }
+    }
+    if(count>=5) return true;
+  }
+  return false;
+}
+// 落子
+function placeMove(x,y,player){
+  board[y][x]=player;
+  moveStack.push({x,y,player});
+  drawPiece(x,y,player);
+  if(checkWin(x,y,player)){
+    gameOver=true;
+    updateStatus(player === 1 ? "黑子（玩家）勝利！" : (mode==="ai" ? "白子（電腦）勝利！" : "白子（玩家）勝利！"));
+    drawBoard();
+    moveStack.forEach(m=>drawPiece(m.x,m.y,m.player));
+    return true;
+  }
+  return false;
+}
+// 更新狀態文字
+function updateStatus(text){
+  const status = document.getElementById("status");
+  if(text){
+    status.textContent = text;
+  } else {
+    status.textContent = `輪到：${currentPlayer===1 ? "黑子（玩家）" : mode==="ai" ? "白子（電腦）" : "白子（玩家）"}`;
+  }
+}
+// 悔棋
+function undo(){
+  if(moveStack.length===0 || aiThinking || gameOver) return;
+  if(mode==="ai"){
+    if(moveStack.length<2) return;
+    for(let i=0;i<2;i++){
+      const last=moveStack.pop();
+      board[last.y][last.x]=0;
+    }
+  }else{
+    const last=moveStack.pop();
+    if(!last) return;
+    board[last.y][last.x]=0;
+  }
+  gameOver=false;
+  currentPlayer=1;
+  drawBoard();
+  moveStack.forEach(m=>drawPiece(m.x,m.y,m.player));
+  updateStatus();
+}
+// 重來
+function restart(){
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      board[y][x]=0;
+    }
+  }
+  moveStack.length=0;
+  currentPlayer=1;
+  gameOver=false;
+  drawBoard();
+  updateStatus();
+}
+// 玩家下棋事件
+canvas.onclick = function(e){
+  if(gameOver || aiThinking) return;
+  if(currentPlayer===2 && mode==="ai") return;
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX-rect.left)/cellSize);
+  const y = Math.floor((e.clientY-rect.top)/cellSize);
+  if(board[y][x]!==0) return;
+
+  const won = placeMove(x,y,currentPlayer);
+  if(won){
+    return;
+  }
+  currentPlayer=3-currentPlayer;
+  updateStatus();
+  if(mode==="ai" && currentPlayer===2 && !gameOver){
+    aiThinking=true;
+    drawBoard();
+    moveStack.forEach(m=>drawPiece(m.x,m.y,m.player));
+    setTimeout(() => {
+      aiMove();
+      aiThinking=false;
+    }, 100);
+  }
+}
+// AI 評分函式（九段級多模式判斷）
+function evaluatePoint(x,y,player){
+  if(board[y][x]!==0) return -Infinity;
+  const patterns = [
+    { name:"five", score:100000, check:fiveInRow },
+    { name:"openFour", score:10000, check:openFour },
+    { name:"four", score:1000, check:four },
+    { name:"openThree", score:100, check:openThree },
+    { name:"three", score:50, check:three },
+    { name:"openTwo", score:10, check:openTwo },
+  ];
+  let totalScore = 0;
+  for(const pat of patterns){
+    if(pat.check(x,y,player)){
+      totalScore += pat.score;
+    }
+  }
+  return totalScore;
+}
+// AI 移動演算法：選最高分位置（評分同時考慮攻守）
+function aiMove(){
+  let bestScore = -Infinity;
+  let bestMoves = [];
+
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      if(board[y][x]!==0) continue;
+      const myScore = evaluatePoint(x,y,2);
+      const oppScore = evaluatePoint(x,y,1);
+      const score = myScore + oppScore*0.8;
+
+      if(score > bestScore){
+        bestScore = score;
+        bestMoves = [{x,y}];
+      } else if(score === bestScore){
+        bestMoves.push({x,y});
+      }
+    }
+  }
+  const move = bestMoves[Math.floor(Math.random()*bestMoves.length)];
+
+  const won = placeMove(move.x,move.y,2);
+  if(won){
+    // AI 贏了，遊戲結束
+    gameOver = true;
+    updateStatus("白子（電腦）勝利！");
+    drawBoard();
+    moveStack.forEach(m=>drawPiece(m.x,m.y,m.player));
+    return;
+  }
+
+  if(!gameOver) currentPlayer=1;
+  updateStatus();
+  drawBoard();
+  moveStack.forEach(m=>drawPiece(m.x,m.y,m.player));
+}
+// 判斷五連
+function fiveInRow(x,y,player){
+  return countInDirection(x,y,player,5);
+}
+// 判斷活四
+function openFour(x,y,player){
+  return checkLine(x,y,player,4,true);
+}
+// 判斷四連
+function four(x,y,player){
+  return checkLine(x,y,player,4,false);
+}
+// 判斷活三
+function openThree(x,y,player){
+  return checkLine(x,y,player,3,true);
+}
+// 判斷三連
+function three(x,y,player){
+  return checkLine(x,y,player,3,false);
+}
+// 判斷活二
+function openTwo(x,y,player){
+  return checkLine(x,y,player,2,true);
+}
+// 公共函數：數連續棋子
+function countInDirection(x,y,player,countNeeded){
+  for(let [dx,dy] of directions){
+    let count=1;
+    for(let dir of [-1,1]){
+      let nx=x+dx*dir;
+      let ny=y+dy*dir;
+      while(nx>=0 && ny>=0 && nx<size && ny<size && board[ny][nx]===player){
+        count++;
+        nx+=dx*dir;
+        ny+=dy*dir;
+      }
+    }
+    if(count>=countNeeded) return true;
+  }
+  return false;
+}
+// 判斷線段活四活三簡易示意
+function checkLine(x,y,player,length,openEnds){
+  for(let [dx,dy] of directions){
+    let count=1;
+    let blocks=0;
+    for(let dir of [-1,1]){
+      let nx=x+dx*dir;
+      let ny=y+dy*dir;
+      while(nx>=0 && ny>=0 && nx<size && ny<size && board[ny][nx]===player){
+        count++;
+        nx+=dx*dir;
+        ny+=dy*dir;
+      }
+      if(nx<0 || ny<0 || nx>=size || ny>=size || (board[ny][nx]!==0 && board[ny][nx]!==player)){
+        blocks++;
+      }
+    }
+    if(count===length){
+      if(openEnds && blocks===0) return true;
+      if(!openEnds && blocks<=1) return true;
+    }
+  }
+  return false;
+}
+// 模式切換按鈕
+document.getElementById("modeBtn").onclick = function(){
+  if(aiThinking) return;
+  if(mode==="ai"){
+    mode="pvp";
+    this.textContent = "切換到人機模式";
+    currentPlayer=1;
+  }else{
+    mode="ai";
+    this.textContent = "切換到雙人模式";
+    currentPlayer=1;
+  }
+  restart();
+  updateStatus();
+}
+
+drawBoard();
+updateStatus();
+</script>
+
+</body>
+</html>
